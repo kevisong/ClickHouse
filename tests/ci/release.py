@@ -20,6 +20,7 @@ gh auth login
 import argparse
 import json
 import logging
+import os
 import subprocess
 from contextlib import contextmanager
 from typing import Any, Final, Iterator, List, Optional, Tuple
@@ -27,6 +28,7 @@ from typing import Any, Final, Iterator, List, Optional, Tuple
 from git_helper import Git, commit, release_branch
 from lambda_shared_package.lambda_shared.pr import Labels
 from report import SUCCESS
+from ssh import SSHKey
 from version_helper import (
     FILE_WITH_VERSION_PATH,
     GENERATED_CONTRIBUTORS,
@@ -173,13 +175,9 @@ class Release:
         """
         try:
             self.run("gh auth status")
-        except subprocess.SubprocessError:
-            logging.error(
-                "The github-cli either not installed or not setup, please follow "
-                "the instructions on https://github.com/cli/cli#installation and "
-                "https://cli.github.com/manual/"
-            )
-            raise
+        except subprocess.SubprocessError as ex:
+            print(f"ERROR: gh cli exception: {ex}")
+            raise ex
 
         if self.release_type == self.PATCH:
             self.check_commit_release_ready()
@@ -187,7 +185,7 @@ class Release:
     def do(
         self, check_dirty: bool, check_run_from_master: bool, check_branch: bool
     ) -> None:
-        self.check_prerequisites()
+        #self.check_prerequisites()
 
         if check_dirty:
             logging.info("Checking if repo is clean")
@@ -204,6 +202,9 @@ class Release:
 
         if check_branch:
             self.check_branch()
+
+        # clean env
+        os.environ["GITHUB_TAG"] = ""
 
         if self.release_type == self.NEW:
             with self._checkout(self.release_commit, True):
@@ -224,6 +225,9 @@ class Release:
                         self.release_version.describe,
                         self.release_commit,
                     )
+            assert os.environ["GITHUB_TAG"], "Release tag must be set in the env"
+            with open("./tag.tmp", "w") as text_file:
+                text_file.write(os.environ["GITHUB_TAG"])
 
         if self.dry_run:
             logging.info("Dry running, clean out possible changes")
@@ -558,6 +562,7 @@ class Release:
         try:
             with self._push(tag):
                 yield
+            os.environ["GITHUB_TAG"] = tag
         except (Exception, KeyboardInterrupt):
             logging.warning("Rolling back tag %s", tag)
             self.run(rollback_cmd)
@@ -689,4 +694,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    assert os.getenv("ROBOT_CLICKHOUSE_SSH_KEY", "")
+    with SSHKey("ROBOT_CLICKHOUSE_SSH_KEY"):
+        main()
